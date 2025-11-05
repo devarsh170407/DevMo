@@ -7,8 +7,9 @@ import sqlite3
 from datetime import datetime
 import time
 import threading
+import shutil
 
-class InteractiveFaceRecognition:
+class EnhancedFaceRecognition:
     def __init__(self):
         # Initialize face detector
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -26,6 +27,8 @@ class InteractiveFaceRecognition:
         self.current_unknown_face = None
         self.pending_name_input = False
         self.name_input = ""
+        self.unknown_face_detected = False
+        self.unknown_face_timer = 0
         
         # Create directories if they don't exist
         os.makedirs(self.known_faces_dir, exist_ok=True)
@@ -74,26 +77,28 @@ class InteractiveFaceRecognition:
         self.known_face_encodings = []
         self.known_face_names = []
         
-        for filename in os.listdir(self.known_faces_dir):
-            if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                name = os.path.splitext(filename)[0]
-                image_path = os.path.join(self.known_faces_dir, filename)
+        # Load from person folders
+        for person_name in os.listdir(self.known_faces_dir):
+            person_dir = os.path.join(self.known_faces_dir, person_name)
+            if os.path.isdir(person_dir):
+                # Get all images for this person
+                image_files = [f for f in os.listdir(person_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
                 
-                # Load and process image
-                image = cv2.imread(image_path)
-                if image is not None:
-                    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                    faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                if image_files:
+                    # Use the first image for encoding
+                    first_image_path = os.path.join(person_dir, image_files[0])
+                    image = cv2.imread(first_image_path)
                     
-                    if len(faces) == 1:
-                        # Simple face encoding (using face region as feature vector)
-                        encoding = self.simple_face_encoding(image, faces[0])
-                        if encoding is not None:
-                            self.known_face_encodings.append(encoding)
-                            self.known_face_names.append(name)
-                            print(f"✅ Loaded face: {name}")
-                    else:
-                        print(f"⚠️  Skipped {filename}: {len(faces)} faces detected (need exactly 1)")
+                    if image is not None:
+                        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                        
+                        if len(faces) == 1:
+                            encoding = self.simple_face_encoding(image, faces[0])
+                            if encoding is not None:
+                                self.known_face_encodings.append(encoding)
+                                self.known_face_names.append(person_name)
+                                print(f"✅ Loaded face: {person_name} ({len(image_files)} photos)")
         
         # Save encodings for future use
         self.save_face_encodings()
@@ -151,21 +156,143 @@ class InteractiveFaceRecognition:
         
         return None
     
+    def register_new_face(self):
+        """Register a new face by taking 3 photos with 5-second gaps"""
+        print("\n" + "="*50)
+        print("         📸 FACE REGISTRATION PROCESS")
+        print("="*50)
+        
+        # Get person's name
+        name = input("Enter the person's name: ").strip()
+        if not name:
+            print("❌ No name provided. Registration cancelled.")
+            return
+        
+        # Create person's folder
+        safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        person_dir = os.path.join(self.known_faces_dir, safe_name)
+        os.makedirs(person_dir, exist_ok=True)
+        
+        print(f"\n✅ Created folder for: {name}")
+        print("📸 Get ready to take 3 photos...")
+        print("   - Photos will be taken every 5 seconds")
+        print("   - Please look directly at the camera")
+        print("   - Make sure your face is clearly visible")
+        print("\nPress 's' to start capturing, 'q' to cancel")
+        
+        # Initialize camera
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            print("❌ Error: Could not open webcam")
+            return
+        
+        photo_count = 0
+        capturing = False
+        last_capture_time = 0
+        
+        while photo_count < 3:
+            ret, frame = cap.read()
+            if not ret:
+                print("❌ Error: Could not read frame")
+                break
+            
+            # Display instructions
+            display_frame = frame.copy()
+            
+            if not capturing:
+                cv2.putText(display_frame, f"Ready to capture: {name}", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(display_frame, "Press 's' to START capturing", (10, 60), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(display_frame, "Press 'q' to CANCEL", (10, 90), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            else:
+                # Detect face during capture
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
+                
+                for (x, y, w, h) in faces:
+                    cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                
+                current_time = time.time()
+                
+                if current_time - last_capture_time >= 5:  # 5 second gap
+                    # Take photo
+                    photo_count += 1
+                    filename = f"photo_{photo_count}.jpg"
+                    filepath = os.path.join(person_dir, filename)
+                    cv2.imwrite(filepath, frame)
+                    last_capture_time = current_time
+                    
+                    print(f"✅ Photo {photo_count}/3 captured and saved!")
+                    
+                    # Show countdown for next photo
+                    if photo_count < 3:
+                        print(f"⏰ Next photo in 5 seconds...")
+                
+                # Display capture progress
+                cv2.putText(display_frame, f"CAPTURING: {name}", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(display_frame, f"Photos: {photo_count}/3", (10, 60), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                if photo_count < 3:
+                    time_remaining = 5 - (current_time - last_capture_time)
+                    cv2.putText(display_frame, f"Next photo in: {max(0, int(time_remaining))}s", (10, 90), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                else:
+                    cv2.putText(display_frame, "✅ CAPTURE COMPLETE!", (10, 90), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.putText(display_frame, "Press 'q' to finish", (10, 120), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            # Display frame
+            cv2.imshow('Face Registration', display_frame)
+            
+            # Handle key presses
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('s') and not capturing:
+                capturing = True
+                last_capture_time = time.time() - 5  # Start immediately
+                print("🚀 Starting capture process...")
+        
+        # Cleanup
+        cap.release()
+        cv2.destroyAllWindows()
+        
+        if photo_count == 3:
+            print(f"\n🎉 Successfully registered {name} with 3 photos!")
+            print(f"📁 Photos saved in: {person_dir}")
+            
+            # Reload known faces to include the new person
+            self.load_known_faces()
+        else:
+            print(f"\n❌ Registration incomplete. Only {photo_count}/3 photos captured.")
+            # Remove the folder if registration was cancelled
+            if os.path.exists(person_dir) and photo_count == 0:
+                shutil.rmtree(person_dir)
+                print("🗑️ Registration folder removed.")
+    
     def save_new_face(self, image, face_rect, name):
-        """Save a new face image and add to known faces"""
+        """Save a new face image from automatic detection"""
         try:
             x, y, w, h = face_rect
+            
+            # Create person's folder
+            safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            person_dir = os.path.join(self.known_faces_dir, safe_name)
+            os.makedirs(person_dir, exist_ok=True)
             
             # Extract face region
             face_roi = image[y:y+h, x:x+w]
             
-            # Create filename (remove special characters)
-            safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            filename = f"{safe_name}.jpg"
-            filepath = os.path.join(self.known_faces_dir, filename)
-            
-            # Save image
+            # Save single photo for automatic detection
+            filename = f"auto_detected.jpg"
+            filepath = os.path.join(person_dir, filename)
             cv2.imwrite(filepath, face_roi)
+            
             print(f"✅ Saved new face: {name}")
             
             # Add to known faces
@@ -263,6 +390,7 @@ class InteractiveFaceRecognition:
     def get_name_input(self):
         """Get name input from user in a separate thread"""
         print("\n🎯 NEW FACE DETECTED!")
+        print("🔴 UNKNOWN PERSON DETECTED!")
         print("Please enter the name for this face:")
         self.name_input = input("Name: ").strip()
         self.pending_name_input = False
@@ -271,6 +399,10 @@ class InteractiveFaceRecognition:
         """Process an unknown face - ask for name and save"""
         if self.pending_name_input:
             return "⏳ Waiting for name input..."
+        
+        # Set unknown face flag for visual feedback
+        self.unknown_face_detected = True
+        self.unknown_face_timer = time.time()
         
         # Store the unknown face data
         self.current_unknown_face = {
@@ -285,7 +417,7 @@ class InteractiveFaceRecognition:
         input_thread.daemon = True
         input_thread.start()
         
-        return "🆕 Please enter name in console"
+        return "🔴 UNKNOWN - Enter name in console"
     
     def check_name_input(self):
         """Check if name input is complete and process the face"""
@@ -302,12 +434,34 @@ class InteractiveFaceRecognition:
                 self.mark_attendance(name)
                 print(f"✅ Successfully registered {name} and marked attendance!")
             
+            # Reset unknown face flag
+            self.unknown_face_detected = False
+            
             # Reset
             self.current_unknown_face = None
             self.name_input = ""
             return True
         
         return False
+    
+    def draw_red_alert(self, frame):
+        """Draw red alert border and warning message"""
+        height, width = frame.shape[:2]
+        
+        # Draw red border
+        border_thickness = 10
+        cv2.rectangle(frame, (0, 0), (width, height), (0, 0, 255), border_thickness)
+        
+        # Draw flashing red background for warning text
+        current_time = time.time()
+        if int(current_time * 2) % 2 == 0:  # Flash every 0.5 seconds
+            cv2.rectangle(frame, (0, 0), (width, 80), (0, 0, 255), -1)
+            cv2.putText(frame, "🚨 UNKNOWN FACE DETECTED!", (width//2 - 200, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(frame, "Please enter name in console", (width//2 - 180, 60), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        return frame
     
     def run_interactive_attendance(self):
         """Run interactive face recognition attendance system"""
@@ -319,7 +473,8 @@ class InteractiveFaceRecognition:
         
         print("\n🎥 Interactive Face Recognition Started")
         print("🔍 System will:")
-        print("   - Automatically recognize known faces")
+        print("   - Show 🟢 GREEN for known faces")
+        print("   - Show 🔴 RED for unknown faces")
         print("   - Ask for name when new face is detected")
         print("   - Prevent duplicate attendance")
         print("\nControls:")
@@ -349,16 +504,21 @@ class InteractiveFaceRecognition:
                 gray,
                 scaleFactor=1.1,
                 minNeighbors=5,
-                minSize=(50, 50)  # Larger minimum size for better recognition
+                minSize=(50, 50)
             )
             
             current_time = time.time()
             face_info = []
+            unknown_faces_detected = False
             
             # Check for completed name input
             if self.check_name_input():
                 # Refresh known faces after adding new one
                 self.load_known_faces()
+            
+            # Reset unknown face flag after 3 seconds if no input
+            if self.unknown_face_detected and current_time - self.unknown_face_timer > 3:
+                self.unknown_face_detected = False
             
             for (x, y, w, h) in faces:
                 # Create face encoding
@@ -378,8 +538,10 @@ class InteractiveFaceRecognition:
                         else:
                             status = "✅ Known - Already Marked"
                         color = (0, 255, 0)  # Green
+                        thickness = 2
                     else:
                         # Unknown face
+                        unknown_faces_detected = True
                         face_id = f"unknown_{hash(face_encoding.tobytes()) % 10000:04d}"
                         
                         # Check if we're already processing this face
@@ -387,44 +549,78 @@ class InteractiveFaceRecognition:
                             status = "⏳ Processing..."
                             color = (255, 165, 0)  # Orange
                             name = "Unknown"
+                            thickness = 2
                         else:
                             # New unknown face - ask for name
                             status = self.process_unknown_face(frame, (x, y, w, h), face_encoding)
                             recent_faces[face_id] = current_time
-                            color = (255, 255, 0)  # Yellow
-                            name = "Unknown"
+                            color = (0, 0, 255)  # RED for unknown
+                            name = "UNKNOWN"
+                            thickness = 3  # Thicker border for unknown faces
                     
-                    face_info.append((x, y, w, h, name, status, color))
+                    face_info.append((x, y, w, h, name, status, color, thickness))
             
             # Draw face rectangles and info
-            for (x, y, w, h, name, status, color) in face_info:
-                # Draw rectangle
-                cv2.rectangle(display_frame, (x, y), (x+w, y+h), color, 2)
+            for (x, y, w, h, name, status, color, thickness) in face_info:
+                # Draw rectangle with appropriate thickness
+                cv2.rectangle(display_frame, (x, y), (x+w, y+h), color, thickness)
                 
-                # Draw name and status
-                cv2.putText(display_frame, f'{name}', (x, y-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-                cv2.putText(display_frame, status, (x, y+h+20), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                # Draw name and status with background for better visibility
+                text_color = (255, 255, 255)  # White text
+                
+                # For unknown faces, use red background
+                if color == (0, 0, 255):
+                    bg_color = (0, 0, 255)  # Red background
+                    text_size_name = cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                    cv2.rectangle(display_frame, (x, y-35), (x+text_size_name[0], y), bg_color, -1)
+                    cv2.putText(display_frame, name, (x, y-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+                    
+                    text_size_status = cv2.getTextSize(status, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    cv2.rectangle(display_frame, (x, y+h), (x+text_size_status[0], y+h+25), bg_color, -1)
+                    cv2.putText(display_frame, status, (x, y+h+20), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
+                else:
+                    # For known faces, use semi-transparent background
+                    cv2.putText(display_frame, name, (x, y-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                    cv2.putText(display_frame, status, (x, y+h+20), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
             
-            # Display stats
-            cv2.putText(display_frame, f'Known Faces: {len(self.known_face_names)}', (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(display_frame, f'Faces Detected: {len(faces)}', (10, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            # Draw red alert if unknown faces are detected
+            if unknown_faces_detected or self.unknown_face_detected:
+                display_frame = self.draw_red_alert(display_frame)
+            
+            # Display stats with colored backgrounds
+            cv2.rectangle(display_frame, (5, 5), (300, 100), (0, 0, 0), -1)  # Black background for stats
+            
+            cv2.putText(display_frame, f'Known Faces: {len(self.known_face_names)}', (10, 25), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.putText(display_frame, f'Faces Detected: {len(faces)}', (10, 50), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            
+            # Show unknown face warning
+            if unknown_faces_detected:
+                cv2.putText(display_frame, 'UNKNOWN FACE: 🔴', (10, 75), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            else:
+                cv2.putText(display_frame, 'Status: 🟢 All Known', (10, 75), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
             
             # Show pending input status
             if self.pending_name_input:
-                status_text = "🟡 WAITING FOR NAME INPUT - Check console!"
-                cv2.putText(display_frame, status_text, (10, 90), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                warning_text = "🔴 ENTER NAME IN CONSOLE NOW!"
+                text_size = cv2.getTextSize(warning_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+                cv2.rectangle(display_frame, (5, 105), (5 + text_size[0] + 10, 140), (0, 0, 255), -1)
+                cv2.putText(display_frame, warning_text, (10, 130), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
             # Display controls
-            cv2.putText(display_frame, "Press 'q':Quit 'v':View 'e':Export 'c':Clear", (10, 120), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(display_frame, "Press 'q':Quit 'v':View 'e':Export 'c':Clear", (10, 160), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
             
             # Display frame
-            cv2.imshow('DevMo - Interactive Face Recognition', display_frame)
+            cv2.imshow('DevMo - Face Recognition (🔴=Unknown)', display_frame)
             
             # Handle key presses
             key = cv2.waitKey(1) & 0xFF
@@ -438,6 +634,7 @@ class InteractiveFaceRecognition:
             elif key == ord('c'):
                 if self.pending_name_input:
                     self.pending_name_input = False
+                    self.unknown_face_detected = False
                     self.current_unknown_face = None
                     self.name_input = ""
                     print("✅ Cleared pending name input")
@@ -446,33 +643,38 @@ class InteractiveFaceRecognition:
         cv2.destroyAllWindows()
 
 def main():
-    system = InteractiveFaceRecognition()
+    system = EnhancedFaceRecognition()
     
     while True:
         print("\n" + "="*60)
-        print("           DevMo - Interactive Face Recognition")
+        print("           DevMo - Enhanced Face Recognition System")
         print("="*60)
         print("1. Start Interactive Attendance System")
-        print("2. View Today's Attendance")
-        print("3. Export Attendance to CSV")
-        print("4. View Known Faces")
-        print("5. Exit")
+        print("2. Add New Face (Register Person)")
+        print("3. View Today's Attendance")
+        print("4. Export Attendance to CSV")
+        print("5. View Known Faces")
+        print("6. Exit")
         
-        choice = input("\nSelect an option (1-5): ").strip()
+        choice = input("\nSelect an option (1-6): ").strip()
         
         if choice == '1':
             system.run_interactive_attendance()
         elif choice == '2':
-            system.view_attendance()
+            system.register_new_face()
         elif choice == '3':
+            system.view_attendance()
+        elif choice == '4':
             count = system.export_attendance()
             print(f"Exported {count} attendance records")
-        elif choice == '4':
+        elif choice == '5':
             print(f"\nKnown faces: {len(system.known_face_names)}")
             for name in system.known_face_names:
-                print(f"👤 {name}")
-        elif choice == '5':
-            print("Thank you for using DevMo Interactive Face Recognition System!")
+                person_dir = os.path.join(system.known_faces_dir, name)
+                photo_count = len([f for f in os.listdir(person_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+                print(f"👤 {name} ({photo_count} photos)")
+        elif choice == '6':
+            print("Thank you for using DevMo Enhanced Face Recognition System!")
             break
         else:
             print("Invalid option. Please try again.")
