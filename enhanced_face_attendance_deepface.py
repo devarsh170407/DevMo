@@ -98,23 +98,42 @@ class DeepFaceAttendanceSystem:
             conn.close()
             return False
 
-    # ---------------- RECOGNIZE FACE ----------------
+    # ---------------- RECOGNIZE FACE (Highly Reliable using verify) ----------------
     def recognize_face(self, face_path):
         try:
-            result = DeepFace.find(
-                img_path=face_path,
-                db_path=self.known_faces_dir,
-                model_name='VGG-Face',
-                enforce_detection=False,
-                silent=True
-            )
-            if len(result) > 0 and not result[0].empty:
-                matched_path = result[0].iloc[0]['identity']
-                folder = os.path.basename(os.path.dirname(matched_path))
-                roll_no, name = folder.split("_", 1)
+            best_match = None
+            best_score = 1.0
+            roll_no, name = None, None
+
+            for person_folder in os.listdir(self.known_faces_dir):
+                person_dir = os.path.join(self.known_faces_dir, person_folder)
+                if not os.path.isdir(person_dir):
+                    continue
+
+                for file in os.listdir(person_dir):
+                    ref_path = os.path.join(person_dir, file)
+                    try:
+                        verify_result = DeepFace.verify(
+                            img1_path=face_path,
+                            img2_path=ref_path,
+                            model_name='VGG-Face',
+                            distance_metric='cosine',
+                            enforce_detection=False,
+                            silent=True
+                        )
+                        distance = verify_result['distance']
+                        if distance < best_score:
+                            best_score = distance
+                            best_match = person_folder
+                    except Exception:
+                        continue
+
+            if best_match and best_score < 0.55:
+                roll_no, name = best_match.split("_", 1)
                 return roll_no, name
             else:
                 return None, None
+
         except Exception as e:
             print(f"⚠️ Recognition error: {e}")
             return None, None
@@ -190,7 +209,7 @@ class DeepFaceAttendanceSystem:
             body += "\nRegards,\nDevMo Attendance System 🤖"
 
         sender_email = "devarshbhatt1747@gmail.com"
-        sender_password = "fvxhscuxqaljgsjv"  # your Gmail app password
+        sender_password = "fvxhscuxqaljgsjv"
         subject = f"Attendance Report - {today}"
 
         msg = MIMEMultipart()
@@ -249,17 +268,16 @@ class DeepFaceAttendanceSystem:
                     color = (0, 255, 0)
                     label = f"{roll_no} - {name}"
 
+                    # Only mark once per day
                     if roll_no not in already_marked:
                         new_entry = self.mark_attendance(roll_no, name)
                         if new_entry:
                             already_marked.add(roll_no)
                             thank_you_display[name] = time.time()
 
-                    # Always show name
+                    # Show name and thank you
                     cv2.putText(frame, label, (x, y - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-                    # Show thank-you bottom left
                     if name in thank_you_display and time.time() - thank_you_display[name] < 5:
                         h_frame, w_frame, _ = frame.shape
                         cv2.putText(frame, f"🙏 Thank you, {name}!", (20, h_frame - 30),
