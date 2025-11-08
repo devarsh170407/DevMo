@@ -45,7 +45,7 @@ def record_attendance(roll_no, name):
         cursor.execute("INSERT INTO attendance (roll_no, name, date, time, status) VALUES (?, ?, ?, ?, ?)",
                       (roll_no, name, today, current_time, 'Present'))
         conn.commit()
-        print(f"Attendance recorded for {name} (Roll No: {roll_no})")
+        print(f"Attendance recorded for {name}")
         conn.close()
         return True
     
@@ -67,18 +67,15 @@ def display_attendance():
     cursor.execute("SELECT roll_no, name, time FROM attendance WHERE date=?", (today,))
     records = cursor.fetchall()
     
-    print(f"\nToday's Attendance Report ({today}):")
-    print("-" * 50)
+    print(f"Today's Attendance ({today}):")
     if records:
         for record in records:
             print(f"Roll No: {record[0]} | Name: {record[1]} | Time: {record[2]}")
     else:
         print("No attendance records found")
-    print("-" * 50)
     conn.close()
 
 def generate_attendance_report():
-
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
@@ -99,27 +96,26 @@ def generate_attendance_report():
         </style>
     </head>
     <body>
-        <h2> Daily Attendance Report - {today}</h2>
+        <h2>Attendance Report - {today}</h2>
     """
     
     if records:
         report += "<table>"
-        report += "<tr><th>Roll No</th><th>Student Name</th><th>Check-in Time</th></tr>"
+        report += "<tr><th>Roll No</th><th>Name</th><th>Time</th></tr>"
         for record in records:
             report += f"<tr><td>{record[0]}</td><td>{record[1]}</td><td>{record[2]}</td></tr>"
         report += "</table>"
-        report += f"<p><strong>Total Present: {len(records)} students</strong></p>"
+        report += f"<p>Total Present: {len(records)}</p>"
     else:
-        report += "<p>No attendance records marked yet for today.</p>"
+        report += "<p>No attendance records</p>"
     
     report += "</body></html>"
     return report
 
 def email_attendance_report():
-    """Send attendance report via email to teacher"""
-    recipient_email = input("Enter teacher's email").strip()
+    recipient_email = input("Enter email: ").strip()
     if not recipient_email:
-        print("Please enter a valid email")
+        print("Please enter valid email")
         return
 
     report_html = generate_attendance_report()
@@ -132,32 +128,35 @@ def email_attendance_report():
     message.attach(MIMEText(report_html, 'html'))
     
     try:
-        print(f"Sending attendance...")
+        print("Sending email...")
         email_server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
         email_server.starttls()  
         email_server.login(SENDER_EMAIL, SENDER_PASSWORD)
         email_server.sendmail(SENDER_EMAIL, recipient_email, message.as_string())
         email_server.quit()
-        print("Attendance report sent")
+        print("Email sent")
     except Exception as error:
-        print(f"Failed to send email:")
+        print("Failed to send email")
 
 def register_student_face():
-
-    roll_no = input("Enter roll no.: ").strip()
-    name = input("Enter Name: ").strip()
+    roll_no = input("Enter roll no: ").strip()
+    name = input("Enter name: ").strip()
     
     if not roll_no or not name:
-        print("Please provide both roll no. and name")
+        print("Please provide roll no and name")
         return
 
     student_folder = os.path.join(KNOWN_FACES_DIR, f"{roll_no}_{name}")
     os.makedirs(student_folder, exist_ok=True)
     
-    print("\nCapturing 3 photos for facial registration...")
-    print("Press 's' to capture each photo")
+    print("Capturing 3 photos...")
+    print("Press 's' to capture")
 
     camera = cv2.VideoCapture(0)
+    if not camera.isOpened():
+        print("Camera not available")
+        return
+        
     photos_captured = 0
     
     while photos_captured < 3:
@@ -176,7 +175,7 @@ def register_student_face():
         if key_press == ord('s'):
             photos_captured += 1
             cv2.imwrite(os.path.join(student_folder, f"photo_{photos_captured}.jpg"), video_frame)
-            print(f"Photo saved")
+            print(f"Photo {photos_captured} saved")
             
             cv2.putText(video_frame, "CAPTURED!", (200, 300), cv2.FONT_HERSHEY_SIMPLEX, 
                        1, (0, 255, 0), 3)
@@ -188,10 +187,9 @@ def register_student_face():
             
     camera.release()
     cv2.destroyAllWindows()
-    print(f"Registration done for {name} (Roll No: {roll_no})")
+    print(f"Registration done for {name}")
 
 def identify_face(video_frame):
-    """Identify a face from the database"""
     temp_image_path = "temp_face.jpg"
     cv2.imwrite(temp_image_path, video_frame)
     
@@ -223,18 +221,31 @@ hand_drawer = mp.solutions.drawing_utils
 
 initialize_database()
 
+def safe_camera_release():
+    try:
+        cv2.destroyAllWindows()
+        time.sleep(0.5)
+    except Exception as e:
+        pass
+
 def launch_attendance_system():
+    safe_camera_release()
+    
     camera = cv2.VideoCapture(0)
     
-    print("\n" + "="*60)
-    print("DevMo Attendance System")
+    if not camera.isOpened():
+        print("Camera not available")
+        return
+    
     print("="*60)
-    print("1 Finger   -> Email Report")
-    print("2 Fingers  -> Register New Student")
-    print("3 Fingers  -> View Today's Attendance")
-    print("5 Fingers  -> Mark Attendance")
-    print("4 Fingers  -> Clear All Data")
-    print("Closed Hand-> Exit System")
+    print("DevMo attendance system")
+    print("="*60)
+    print("1 Finger    > Email Report")
+    print("2 Fingers   > Register New Student")
+    print("3 Fingers   > View Today's Attendance")
+    print("5 Fingers   > Mark Attendance")
+    print("4 Fingers   > Clear All Data")
+    print("Closed Hand > Exit System")
 
     current_gesture = None
     gesture_timer = None
@@ -244,7 +255,6 @@ def launch_attendance_system():
     GESTURE_HOLD_TIME = 3  
 
     def count_raised_fingers(hand_landmarks, hand_side):
-        """Count number of fingers raised"""
         finger_tips = [4, 8, 12, 16, 20]
         finger_states = []
         
@@ -261,98 +271,107 @@ def launch_attendance_system():
             
         return sum(finger_states)
 
-    while True:
-        success, frame = camera.read()
-        if not success:
-            break
-            
-        frame = cv2.flip(frame, 1)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        hand_results = hands_detector.process(rgb_frame)
-
-        detected_gesture = None
-
-        if hand_results.multi_hand_landmarks and hand_results.multi_handedness:
-            for hand_landmarks, hand_info in zip(hand_results.multi_hand_landmarks, 
-                                               hand_results.multi_handedness):
-                hand_drawer.draw_landmarks(frame, hand_landmarks, hand_recognizer.HAND_CONNECTIONS)
-                hand_side = hand_info.classification[0].label
-                finger_count = count_raised_fingers(hand_landmarks, hand_side)
-
-                gesture_map = {
-                    1: "email",
-                    2: "register", 
-                    3: "view",
-                    5: "start",
-                    4: "clear",
-                    0: "exit"
-                }
+    try:
+        while True:
+            success, frame = camera.read()
+            if not success:
+                break
                 
-                detected_gesture = gesture_map.get(finger_count)
-                        
-                cv2.putText(frame, f"Fingers: {finger_count} | Hold for 3 seconds", (30, 40),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            frame = cv2.flip(frame, 1)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            hand_results = hands_detector.process(rgb_frame)
 
-        if detected_gesture:
-            if gesture_timer is None or detected_gesture != current_gesture:
-                gesture_timer = time.time()
-                current_gesture = detected_gesture
+            detected_gesture = None
+
+            if hand_results.multi_hand_landmarks and hand_results.multi_handedness:
+                for hand_landmarks, hand_info in zip(hand_results.multi_hand_landmarks, 
+                                                   hand_results.multi_handedness):
+                    hand_drawer.draw_landmarks(frame, hand_landmarks, hand_recognizer.HAND_CONNECTIONS)
+                    hand_side = hand_info.classification[0].label
+                    finger_count = count_raised_fingers(hand_landmarks, hand_side)
+
+                    gesture_map = {
+                        1: "email",
+                        2: "register", 
+                        3: "view",
+                        5: "start",
+                        4: "clear",
+                        0: "exit"
+                    }
+                    
+                    detected_gesture = gesture_map.get(finger_count)
+                            
+                    cv2.putText(frame, f"Fingers: {finger_count} | Hold for 3 seconds", (30, 40),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+            if detected_gesture:
+                if gesture_timer is None or detected_gesture != current_gesture:
+                    gesture_timer = time.time()
+                    current_gesture = detected_gesture
+                else:
+                    time_held = time.time() - gesture_timer
+                    
+                    progress_width = int((time_held / GESTURE_HOLD_TIME) * 200)
+                    cv2.rectangle(frame, (30, 80), (30 + progress_width, 100), (255, 0, 0), cv2.FILLED)
+                    cv2.putText(frame, f"Action: {detected_gesture.upper()}", 
+                               (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    
+                    if time_held >= GESTURE_HOLD_TIME:
+                        gesture_timer = None  
+                        current_gesture = None
+
+                        if detected_gesture == "email":
+                            email_attendance_report()
+
+                        elif detected_gesture == "register":
+                            register_student_face()
+
+                        elif detected_gesture == "start":
+                            print("Starting facial recognition...")
+                            roll_no, name = identify_face(frame)
+                            if roll_no and name:
+                                attendance_marked = record_attendance(roll_no, name)
+                                if attendance_marked:
+                                    thank_you_display = f"Thank you, {name}!" 
+                                    thank_you_timestamp = time.time()
+                            else:
+                                print("No matching student found")
+
+                        elif detected_gesture == "view": 
+                            display_attendance() 
+
+                        elif detected_gesture == "clear":
+                            confirm = input("Are you sure you want to clear ALL attendance data? (y/n): ")
+                            if confirm.lower() == 'y':
+                                reset_attendance_data()
+                            else:
+                                print("Data clearance cancelled")
+
+                        elif detected_gesture == "exit":
+                            print("Shutting down attendance system...")
+                            break
             else:
-                time_held = time.time() - gesture_timer
-                
-                if time_held >= GESTURE_HOLD_TIME:
-                    gesture_timer = None  
-                    current_gesture = None
+                gesture_timer = None
+                current_gesture = None
 
-                    if detected_gesture == "email":
-                        email_attendance_report()
+            if thank_you_display and (time.time() - thank_you_timestamp < THANK_YOU_DISPLAY_TIME):
+                frame_height, frame_width, _ = frame.shape
+                cv2.putText(frame, thank_you_display, (int(frame_width/4), frame_height - 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
+            else:
+                thank_you_display = None
+            
+            cv2.imshow("DevMo attendance system", frame)
+            
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
-                    elif detected_gesture == "register":
-                        register_student_face()
+    except Exception as e:
+        print("Error occurred")
+    
+    finally:
+        camera.release()
+        safe_camera_release()
 
-                    elif detected_gesture == "start":
-                        print("🔍 Starting facial recognition...")
-                        roll_no, name = identify_face(frame)
-                        if roll_no and name:
-                            attendance_marked = record_attendance(roll_no, name)
-                            if attendance_marked:
-                                thank_you_display = f"Thank you, {name}!" 
-                                thank_you_timestamp = time.time()
-                        else:
-                            print("No match")
-
-                    elif detected_gesture == "view": 
-                        display_attendance() 
-
-                    elif detected_gesture == "clear":
-                        confirm = input("Are you sure you want to clear ALL attendance data? (y/n): ")
-                        if confirm.lower() == 'y':
-                            reset_attendance_data()
-                        else:
-                            print("Data clearance cancelled")
-
-                    elif detected_gesture == "exit":
-                        print("Shutting down attendance system...")
-                        camera.release()
-                        cv2.destroyAllWindows()
-                        return
-        else:
-            gesture_timer = None
-            current_gesture = None
-
-        if thank_you_display and (time.time() - thank_you_timestamp < THANK_YOU_DISPLAY_TIME):
-            frame_height, frame_width, _ = frame.shape
-            cv2.putText(frame, thank_you_display, (int(frame_width/4), frame_height - 40),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
-        else:
-            thank_you_display = None
-
-        cv2.imshow("DevMo", frame)
-
-    camera.release()
-    cv2.destroyAllWindows()
-
-# Start the system
 if __name__ == "__main__":
     launch_attendance_system()
-
